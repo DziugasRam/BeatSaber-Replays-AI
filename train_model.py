@@ -12,7 +12,7 @@ from tensorflow.keras import models
 from tensorflow.keras import mixed_precision
 
 
-# mixed_precision.set_global_policy('mixed_float16')
+mixed_precision.set_global_policy('mixed_float16')
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
     for gpu in gpus:
@@ -93,21 +93,24 @@ def preprocess_note(score, time_to_prev_note, note_info):
   # NOTE: timing increases difficulty not linearly and caps out at ~2 seconds
   # no idea if such parameters can be learned by neural networks without adding scaling like I did right here
   time_to_prev_note = max(0, 1 - time_to_prev_note/2)
-  time_to_prev_note = time_to_prev_note * time_to_prev_note * time_to_prev_note * time_to_prev_note
-  
+  time_to_prev_note = time_to_prev_note * time_to_prev_note  
   
   response = [time_to_prev_note]
   col_number = int(note_info[0])
   row_number = int(note_info[1])
   direction_number = int(note_info[2])
-  position = [0] * 4 * 3
-  position[col_number * 3 + row_number] = 1
-  direction = [0] * 10
-  direction[direction_number] = 1
+  # position = [0] * 4 * 3
+  # position[col_number * 3 + row_number] = 1
+  # direction = [0] * 9
+  # direction[direction_number] = 1
+
+  note_type = [0] * 4 * 3 * 9
+  note_type[direction_number * 9 + col_number * 3 + row_number] = 1
 
   # TODO: test with single array where every note type has 1 element
-  response.extend(position)
-  response.extend(direction)
+  # response.extend(position)
+  # response.extend(direction)
+  response.extend(note_type)
   
   response.append(score)
   
@@ -132,9 +135,9 @@ def create_segments(notes):
 
     segment = [note[:-1] for note in notes_slice]
     
-    last_score = notes_slice[-1][-1]
-    # NOTE: last_score divided by 15 to limit it to 0-1 range
-    segments.append((segment, last_score/15))
+    current_score = notes_slice[pre_segment_size][-1]
+    # NOTE: current_score divided by 15 to limit it to 0-1 range
+    segments.append((segment, current_score/15))
   return segments
 
 
@@ -168,57 +171,68 @@ def preprocess_dataset(files):
 
   # NOTE: this is all needed to change the shape of the data for a multi input network
   # TODO: replace this with something readable
-  train_segments = [[] for s in range(segment_size)]
+  train_segments_formatted = [[] for s in range(segment_size)]
   train_scores = []
   for notes, score in train_segments:
     train_scores.append(score)
     for i in range(segment_size):
-      train_segments[i].append(np.array(notes[i])[..., None])
-  
-  val_segments = [[] for s in range(segment_size)]
+      train_segments_formatted[i].append(np.array(notes[i])[..., None])
+
+  val_segments_formatted = [[] for s in range(segment_size)]
   val_scores = []
   for notes, score in val_segments:
     val_scores.append(score)
     for i in range(segment_size):
-      val_segments[i].append(np.array(notes[i])[..., None])
-      
-  return [np.array(n) for n in train_segments], np.array(train_scores), [np.array(n) for n in val_segments], np.array(val_scores)
+      val_segments_formatted[i].append(np.array(notes[i])[..., None])
+
+
+  return [np.array(n) for n in train_segments_formatted], np.array(train_scores), [np.array(n) for n in val_segments_formatted], np.array(val_scores)
 
 train_files, val_files, test_files = get_files()
 
-segment_size = 2
+pre_segment_size = 5
+post_segment_size = 5
+segment_size = pre_segment_size + post_segment_size + 1
 batch_size = 512
 
-train_x, train_y, val_x, val_y = preprocess_dataset(train_files[:2])
+train_x, train_y, val_x, val_y = preprocess_dataset(train_files[:10])
 
-note_shape = (23,1,)
+# note_shape = (22,1,)
+note_shape = (109,1,)
 
 inputs = []
 dense = []
 
 # NOTE: testing with more nodes for the current note. Not sure if it even makes sense
-for i in range(segment_size-1):
+for i in range(pre_segment_size):
   input = keras.Input(shape=note_shape, dtype="float32")
   l = layers.Flatten()(input)
-  l = layers.Dense(256, activation="relu")(l)
-  l = layers.Dense(256, activation="relu")(l)
-  l = layers.Dense(128, activation="relu")(l)
+  l = layers.Dense(256, activation="relu", use_bias=False)(l)
+  l = layers.Dense(256, activation="relu", use_bias=False)(l)
   dense.append(l)
   inputs.append(input)
 
 input = keras.Input(shape=note_shape, dtype="float32")
 l = layers.Flatten()(input)
-l = layers.Dense(1024, activation="relu")(l)
-l = layers.Dense(1024, activation="relu")(l)
-l = layers.Dense(1024, activation="relu")(l)
+l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+l = layers.Dense(1024, activation="relu", use_bias=False)(l)
 dense.append(l)
 inputs.append(input)
 
+for i in range(post_segment_size):
+  input = keras.Input(shape=note_shape, dtype="float32")
+  l = layers.Flatten()(input)
+  l = layers.Dense(256, activation="relu", use_bias=False)(l)
+  l = layers.Dense(256, activation="relu", use_bias=False)(l)
+  dense.append(l)
+  inputs.append(input)
+
 l = layers.Concatenate()(dense)
-l = layers.Dense(1024, activation="relu")(l)
-l = layers.Dense(1024, activation="relu")(l)
-l = layers.Dense(1024, activation="relu")(l)
-out = layers.Dense(1, activation="relu")(l)
+l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+# l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+# l = layers.Dense(1024, activation="relu")(l)
+out = layers.Dense(1, activation="relu", use_bias=False)(l)
 
 model = models.Model(inputs=inputs, outputs = out)
 
@@ -228,7 +242,21 @@ model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
     loss=tf.keras.losses.MeanAbsoluteError(),
     metrics=['mae', 'mse', 'mean_squared_logarithmic_error'],
+    steps_per_execution=16,
 )
+
+tot = 0
+for score in train_y:
+  tot += score
+avg = tot/len(train_y)
+
+totdiff = 0
+for score in train_y:
+  totdiff += max(score - avg, avg - score)
+avgdiff = totdiff/len(train_y)
+
+print(f"Average value: {avg}")
+print(f"Average diff: {avgdiff}")
 
 history = model.fit(
     train_x,
@@ -236,5 +264,6 @@ history = model.fit(
     validation_data=(val_x, val_y),
     batch_size=batch_size,
     epochs=100,
-    callbacks=tf.keras.callbacks.EarlyStopping(verbose=1, patience=15)
+    shuffle=True,
+    callbacks=tf.keras.callbacks.EarlyStopping(verbose=1, patience=5)
 )
