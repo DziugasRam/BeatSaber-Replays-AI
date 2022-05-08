@@ -6,13 +6,14 @@ import tensorflow as tf
 import tensorflow.keras as keras
 import glob
 import json
+import random
 
 from tensorflow.keras import layers
 from tensorflow.keras import models
 from tensorflow.keras import mixed_precision
 
 
-mixed_precision.set_global_policy('mixed_float16')
+# mixed_precision.set_global_policy('mixed_float16')
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
     for gpu in gpus:
@@ -22,24 +23,62 @@ seed = 42
 tf.random.set_seed(seed)
 np.random.seed(seed)
 
-def get_files():
-  data_dir = pathlib.Path("replays")
+def get_leaderboard_replays():
+  replays_dir = pathlib.Path("replays")
+  leaderboards_dir = pathlib.Path("leaderboards")
 
-  # leaderboard_ids = np.array(tf.io.gfile.listdir(str(data_dir)))
-
-  files = glob.glob(f'{data_dir}/*/*.txt')
-  files = tf.random.shuffle(files)
-
-  train_file_count, val_file_count = np.array([0.8, 0.1]) * len(files) # remaining files are for testing
+  # leaderboard_ids = np.array(tf.io.gfile.listdir(str(replays_dir)))
+  train_leaderboard_ids = ["353764", "358946", "347927"]
+  val_leaderboard_ids = ["347842", "347928"]
   
-  train_files, val_files, test_files = np.split(files, [int(train_file_count), int(val_file_count + train_file_count)])
+  leaderboard_ids = []
+  leaderboard_ids.extend(train_leaderboard_ids)
+  leaderboard_ids.extend(val_leaderboard_ids)
+  
+  train_data = []
+  val_data = []
+  
+  for leaderboard_id in leaderboard_ids:
+    leaderboard_page1 = f'{leaderboards_dir}/{leaderboard_id}/Page1.json'
+    leaderboard_page2 = f'{leaderboards_dir}/{leaderboard_id}/Page2.json'
+    
+    replay_files = glob.glob(f'{replays_dir}/{leaderboard_id}/*.txt')
 
-  print('Number of total examples:', len(files))
-  print('Training set size: ', len(train_files))
-  print('Validation set size: ', len(val_files))
-  print('Test set size: ', len(test_files))
-  # NOTE: probably not needed since it could be better to use segments as splits
-  return train_files, val_files, test_files
+    rank_to_playerid = {}
+    try:
+      with open(leaderboard_page1, "r") as f:
+        file_content = f.read()
+        json_content = json.loads(file_content)
+        for score in json_content["scores"]:
+          player_id = score["leaderboardPlayerInfo"]["id"]
+          rank = score["rank"]
+          rank_to_playerid[rank] = player_id
+          
+      with open(leaderboard_page2, "r") as f:
+        file_content = f.read()
+        json_content = json.loads(file_content)
+        for score in json_content["scores"]:
+          player_id = score["leaderboardPlayerInfo"]["id"]
+          rank = score["rank"]
+          rank_to_playerid[rank] = player_id
+    except:
+      continue
+    
+    rank_to_replay = {}
+    
+    for rank in range(1, 10):      
+      for replay_file in replay_files:
+        if f'{rank_to_playerid[rank]}-{leaderboard_id}':
+          rank_to_replay[rank] = replay_file
+        else:
+          rank_to_replay[rank] = None
+    
+    if leaderboard_id in train_leaderboard_ids:
+      train_data.append([leaderboard_id, rank_to_replay])
+    else:
+      val_data.append([leaderboard_id, rank_to_replay])
+
+  return train_data, val_data
 
 
 def read_replay_file(file):
@@ -92,8 +131,8 @@ def get_replay_notes(replay):
 def preprocess_note(score, time_to_prev_note, note_info):
   # NOTE: timing increases difficulty not linearly and caps out at ~2 seconds
   # no idea if such parameters can be learned by neural networks without adding scaling like I did right here
-  time_to_prev_note = max(0, 1 - time_to_prev_note/2)
-  time_to_prev_note = time_to_prev_note * time_to_prev_note  
+  # time_to_prev_note = max(0, 1 - time_to_prev_note/2)
+  # time_to_prev_note = time_to_prev_note * time_to_prev_note  
   
   response = [time_to_prev_note]
   col_number = int(note_info[0])
@@ -117,7 +156,7 @@ def preprocess_note(score, time_to_prev_note, note_info):
   return response
 
 
-def create_segments(notes):
+def create_segments(notes, rank):
   if len(notes) < segment_size:
     return []
   
@@ -134,68 +173,70 @@ def create_segments(notes):
     # avg = tot_score/len(notes_slice)
 
     segment = [note[:-1] for note in notes_slice]
-    
+    segment.append([rank/24])
+
     current_score = notes_slice[pre_segment_size][-1]
     # NOTE: current_score divided by 15 to limit it to 0-1 range
     segments.append((segment, current_score/15))
   return segments
 
 
-def preprocess_files(files):
+def preprocess_leaderboard_replays(leaderboard_replays):
   segments = []
-  for i, file in enumerate(files):
-      if i % 10 == 0:
-        print(f"Processing file: {i}")
+  files_read_count = 0
+  for leaderboard_id, rank_to_replay in leaderboard_replays:
+    for rank, file in rank_to_replay.items():
+      if file is None:
+        continue
       
+      if files_read_count % 10 == 0:
+        print(f"files read: {files_read_count}")
+      files_read_count += 1
+
       replay = read_replay_file(file)
       zero_notes, one_notes = get_replay_notes(replay)
       
-      zero_segments = create_segments(zero_notes)
-      one_segments = create_segments(one_notes)
-      segments.extend(zero_segments)
+      # zero_segments = create_segments(zero_notes)
+      one_segments = create_segments(one_notes, rank)
+      # segments.extend(zero_segments)
       segments.extend(one_segments)
   
   return segments
 
-def preprocess_dataset(files):
-  segments = preprocess_files(files)
-  np.random.shuffle(segments)
+def preprocess_dataset(train_leaderboard_replays, val_leaderboard_replays):
+  train_segments = preprocess_leaderboard_replays(train_leaderboard_replays)
+  val_segments = preprocess_leaderboard_replays(val_leaderboard_replays)
 
-  data_len = len(segments)
+  data_len = len(train_segments) + len(val_segments)
   print(f"Number of segments: {data_len}")
-  train_len = int(data_len*0.8)
-
-  train_segments = segments[:train_len]
-  val_segments = segments[train_len:]
   
-
   # NOTE: this is all needed to change the shape of the data for a multi input network
   # TODO: replace this with something readable
-  train_segments_formatted = [[] for s in range(segment_size)]
+  train_segments_formatted = [[] for s in range(segment_with_rank_size)]
   train_scores = []
   for notes, score in train_segments:
     train_scores.append(score)
-    for i in range(segment_size):
+    for i in range(segment_with_rank_size):
       train_segments_formatted[i].append(np.array(notes[i])[..., None])
 
-  val_segments_formatted = [[] for s in range(segment_size)]
+  val_segments_formatted = [[] for s in range(segment_with_rank_size)]
   val_scores = []
   for notes, score in val_segments:
     val_scores.append(score)
-    for i in range(segment_size):
+    for i in range(segment_with_rank_size):
       val_segments_formatted[i].append(np.array(notes[i])[..., None])
-
 
   return [np.array(n) for n in train_segments_formatted], np.array(train_scores), [np.array(n) for n in val_segments_formatted], np.array(val_scores)
 
-train_files, val_files, test_files = get_files()
+train_data, val_data = get_leaderboard_replays()
 
-pre_segment_size = 5
-post_segment_size = 5
+pre_segment_size = 20
+post_segment_size = 20
 segment_size = pre_segment_size + post_segment_size + 1
-batch_size = 512
+segment_with_rank_size = segment_size + 1
+batch_size = 128
 
-train_x, train_y, val_x, val_y = preprocess_dataset(train_files[:10])
+train_x, train_y, val_x, val_y = preprocess_dataset(train_data, val_data)
 
 # note_shape = (22,1,)
 note_shape = (109,1,)
@@ -207,53 +248,66 @@ dense = []
 for i in range(pre_segment_size):
   input = keras.Input(shape=note_shape, dtype="float32")
   l = layers.Flatten()(input)
-  l = layers.Dense(256, activation="relu", use_bias=False)(l)
-  l = layers.Dense(256, activation="relu", use_bias=False)(l)
+  # l = layers.Dense(256, activation="relu", use_bias=False)(l)
+  # l = layers.Dense(256, activation="relu", use_bias=False)(l)
   dense.append(l)
   inputs.append(input)
 
 input = keras.Input(shape=note_shape, dtype="float32")
 l = layers.Flatten()(input)
-l = layers.Dense(1024, activation="relu", use_bias=False)(l)
-l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+# l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+# l = layers.Dense(1024, activation="relu", use_bias=False)(l)
 dense.append(l)
 inputs.append(input)
 
 for i in range(post_segment_size):
   input = keras.Input(shape=note_shape, dtype="float32")
   l = layers.Flatten()(input)
-  l = layers.Dense(256, activation="relu", use_bias=False)(l)
-  l = layers.Dense(256, activation="relu", use_bias=False)(l)
+  # l = layers.Dense(256, activation="relu", use_bias=False)(l)
+  # l = layers.Dense(256, activation="relu", use_bias=False)(l)
   dense.append(l)
   inputs.append(input)
 
+input = keras.Input(shape=(1,1,), dtype="float32")
+l = layers.Flatten()(input)
+# l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+# l = layers.Dense(1, activation="relu", use_bias=False)(l)
+dense.append(l)
+inputs.append(input)
+
 l = layers.Concatenate()(dense)
-l = layers.Dense(1024, activation="relu", use_bias=False)(l)
-l = layers.Dense(1024, activation="relu", use_bias=False)(l)
+l = layers.Dense(32, activation="linear", use_bias=True)(l)
+l = layers.Dense(32, activation="linear", use_bias=True)(l)
+l = layers.Dense(32, activation="linear", use_bias=True)(l)
+l = layers.Dense(32, activation="linear", use_bias=True)(l)
+l = layers.Dense(32, activation="linear", use_bias=True)(l)
+l = layers.Dense(32, activation="linear", use_bias=True)(l)
+# l = layers.Dense(4, activation="linear", use_bias=True)(l)
+# l = layers.Dense(4, activation="linear", use_bias=True)(l)
 # l = layers.Dense(1024, activation="relu", use_bias=False)(l)
 # l = layers.Dense(1024, activation="relu")(l)
-out = layers.Dense(1, activation="relu", use_bias=False)(l)
+out = layers.Dense(1, activation="linear", use_bias=True)(l)
 
 model = models.Model(inputs=inputs, outputs = out)
 
 model.summary()
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+    optimizer=tf.keras.optimizers.SGD(learning_rate=0.00005, momentum=0.9),
     loss=tf.keras.losses.MeanAbsoluteError(),
     metrics=['mae', 'mse', 'mean_squared_logarithmic_error'],
-    steps_per_execution=16,
+    # steps_per_execution=512,
 )
 
 tot = 0
-for score in train_y:
+for score in val_y:
   tot += score
-avg = tot/len(train_y)
+avg = tot/len(val_y)
 
 totdiff = 0
-for score in train_y:
+for score in val_y:
   totdiff += max(score - avg, avg - score)
-avgdiff = totdiff/len(train_y)
+avgdiff = totdiff/len(val_y)
 
 print(f"Average value: {avg}")
 print(f"Average diff: {avgdiff}")
