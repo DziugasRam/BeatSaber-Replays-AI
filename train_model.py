@@ -233,13 +233,13 @@ def preprocess_dataset(train_leaderboard_replays, val_leaderboard_replays):
 
 train_data, val_data = get_leaderboard_replays()
 
-pre_segment_size = 20
-post_segment_size = 20
+pre_segment_size = 5
+post_segment_size = 5
 segment_size = pre_segment_size + post_segment_size + 1
 segment_with_rank_size = segment_size + 1
 batch_size = 128
 
-train_x, train_y, val_x, val_y = preprocess_dataset(train_data[:20], val_data)
+train_x, train_y, val_x, val_y = preprocess_dataset(train_data[:10], val_data)
 
 # note_shape = (22,1,)
 note_shape = (109,1,)
