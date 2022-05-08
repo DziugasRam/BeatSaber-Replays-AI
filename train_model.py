@@ -27,13 +27,16 @@ def get_leaderboard_replays():
   replays_dir = pathlib.Path("replays")
   leaderboards_dir = pathlib.Path("leaderboards")
 
-  # leaderboard_ids = np.array(tf.io.gfile.listdir(str(replays_dir)))
-  train_leaderboard_ids = ["353764", "358946", "347927"]
-  val_leaderboard_ids = ["347842", "347928"]
+  leaderboard_ids = np.array(tf.io.gfile.listdir(str(replays_dir)))
+  # train_leaderboard_ids = ["353764", "358946", "347927"]
+  val_leaderboard_ids = ["347842", "347928", "292446", "335708"]
   
-  leaderboard_ids = []
-  leaderboard_ids.extend(train_leaderboard_ids)
-  leaderboard_ids.extend(val_leaderboard_ids)
+  for id in val_leaderboard_ids:
+    if id not in leaderboard_ids:
+      leaderboard_ids.append(id)
+  # leaderboard_ids = []
+  # leaderboard_ids.extend(train_leaderboard_ids)
+  # leaderboard_ids.extend(val_leaderboard_ids)
   
   train_data = []
   val_data = []
@@ -66,17 +69,17 @@ def get_leaderboard_replays():
     
     rank_to_replay = {}
     
-    for rank in range(1, 10):      
+    for rank in range(1, 25):      
       for replay_file in replay_files:
         if f'{rank_to_playerid[rank]}-{leaderboard_id}':
           rank_to_replay[rank] = replay_file
         else:
           rank_to_replay[rank] = None
     
-    if leaderboard_id in train_leaderboard_ids:
-      train_data.append([leaderboard_id, rank_to_replay])
-    else:
+    if leaderboard_id in val_leaderboard_ids:
       val_data.append([leaderboard_id, rank_to_replay])
+    else:
+      train_data.append([leaderboard_id, rank_to_replay])
 
   return train_data, val_data
 
@@ -236,7 +239,7 @@ segment_size = pre_segment_size + post_segment_size + 1
 segment_with_rank_size = segment_size + 1
 batch_size = 128
 
-train_x, train_y, val_x, val_y = preprocess_dataset(train_data, val_data)
+train_x, train_y, val_x, val_y = preprocess_dataset(train_data[:20], val_data)
 
 # note_shape = (22,1,)
 note_shape = (109,1,)
