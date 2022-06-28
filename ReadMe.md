@@ -3,7 +3,7 @@
 
 ## Setup
 1. Install a newish version of python and tensorflow with gpu support (and other missing packages)
-2. Download replays from https://drive.google.com/file/d/1sLRxd4V6B-286RPlMZl_eBi-eoYDnF9w/view?usp=sharing and extract them to /replays (only a small number of replays is uploaded here to save space)
+2. Download replays from https://drive.google.com/file/d/1ADXywV7HSkdh_ltiMyRB_b5KUH7PIHqe/view?usp=sharing and extract them to /replays (only a small number of replays is uploaded here to save space)
 3. run `python train_model.py`
 
 
