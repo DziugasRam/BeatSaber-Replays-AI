@@ -1,7 +1,9 @@
 import os
 import pathlib
 import time
+import datetime
 
+from tqdm import tqdm
 import numpy as np
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -19,6 +21,7 @@ from tensorflow.keras import mixed_precision
 seed = 6969
 tf.random.set_seed(seed)
 np.random.seed(seed)
+random.seed(seed)
 
 replays_dir = pathlib.Path("replays")
 leaderboards_dir = pathlib.Path("leaderboards")
@@ -258,7 +261,7 @@ def generate_data(leaderboards_replays, num_threads):
   executor = concurrent.futures.ProcessPoolExecutor(num_threads)
   segments_tasks = [executor.submit(preprocess_leaderboard_replays, leaderboard_replays) for leaderboard_id, leaderboard_replays in leaderboards_replays]
   
-  for segments_task in segments_tasks:
+  for segments_task in tqdm(segments_tasks):
     pre_segment, segment, post_segment, score = segments_task.result()
     pre_segments.extend(pre_segment)
     segments.extend(segment)
@@ -268,11 +271,11 @@ def generate_data(leaderboards_replays, num_threads):
   executor.shutdown()
   return [np.array(pre_segments), np.array(segments), np.array(post_segments)], np.array(scores)
 
-num_threads = 25
+num_threads = 8
 
-pre_segment_size = 9
+pre_segment_size = 3
 post_segment_size = 3
-prediction_size = 1
+prediction_size = 3
 segment_size = pre_segment_size + post_segment_size + prediction_size
 batch_size = 256
 
@@ -285,10 +288,6 @@ if __name__ == '__main__':
   train_x, train_y = generate_data(train_data, num_threads)
   val_x, val_y = generate_data(val_data, num_threads)
   note_size = 26
-  
-  # mixed_precision.set_global_policy('mixed_float16')
-  gpus = tf.config.experimental.list_physical_devices('GPU')
-  tf.config.experimental.set_memory_growth(gpus[0], True)
 
   pre_input = keras.Input(shape=(pre_segment_size, note_size), dtype="float32")
   pre_layer = layers.Flatten()(pre_input)
@@ -337,7 +336,10 @@ if __name__ == '__main__':
     totdiff += max(score - avg, avg - score)
   avgdiff = totdiff/len(val_y)
   print(f"Average diff: {avgdiff}")
-
+  
+  log_dir = "logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+  tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir = log_dir, histogram_freq = 1)
+  
   history = model.fit(
       train_x,
       train_y,
@@ -345,7 +347,7 @@ if __name__ == '__main__':
       batch_size=batch_size,
       epochs=10,
       shuffle=True,
-      callbacks=tf.keras.callbacks.EarlyStopping(verbose=1, patience=20)
+      callbacks=[tf.keras.callbacks.EarlyStopping(verbose=1, patience=20), tensorboard_callback]
   )
 
   predictions = []
